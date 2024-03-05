@@ -699,22 +699,16 @@ def save_one_box(xyxy, im, file=Path("im.jpg"), gain=1.02, pad=10, square=False,
 
 
 @threaded
-def plot_images(
-    images,
-    batch_idx,
-    cls,
-    bboxes=np.zeros(0, dtype=np.float32),
-    confs=None,
-    masks=np.zeros(0, dtype=np.uint8),
-    kpts=np.zeros((0, 51), dtype=np.float32),
-    paths=None,
-    fname="images.jpg",
-    names=None,
-    on_plot=None,
-    max_subplots=16,
-    save=True,
-    conf_thres=0.25,
-):
+def plot_images(images,
+                batch_idx,
+                cls,
+                bboxes=np.zeros(0, dtype=np.float32),
+                masks=np.zeros(0, dtype=np.uint8),
+                kpts=np.zeros((0, 51), dtype=np.float32),
+                paths=None,
+                fname='images.jpg',
+                names=None,
+                on_plot=None):
     """Plot image grid with labels."""
     if isinstance(images, torch.Tensor):
         images = images.cpu().float().numpy()
@@ -730,17 +724,23 @@ def plot_images(
         batch_idx = batch_idx.cpu().numpy()
 
     max_size = 1920  # max image size
+    max_subplots = 16  # max image subplots, i.e. 4x4
     bs, _, h, w = images.shape  # batch size, _, height, width
     bs = min(bs, max_subplots)  # limit plot images
-    ns = np.ceil(bs**0.5)  # number of subplots (square)
+    ns = np.ceil(bs ** 0.5)  # number of subplots (square)
     if np.max(images[0]) <= 1:
         images *= 255  # de-normalise (optional)
 
     # Build Image
     mosaic = np.full((int(ns * h), int(ns * w), 3), 255, dtype=np.uint8)  # init
-    for i in range(bs):
+    for i, im in enumerate(images):
+        if i == max_subplots:  # if last batch has fewer images than we expect
+            break
         x, y = int(w * (i // ns)), int(h * (i % ns))  # block origin
-        mosaic[y : y + h, x : x + w, :] = images[i].transpose(1, 2, 0)
+        im = im.transpose(1, 2, 0)
+        (R, D, G, B, X, Y, Z) = cv2.split(im)
+        merged = cv2.merge([B, G, R])
+        mosaic[y:y + h, x:x + w, :] = merged
 
     # Resize (optional)
     scale = max_size / ns / max(h, w)
@@ -752,42 +752,40 @@ def plot_images(
     # Annotate
     fs = int((h + w) * ns * 0.01)  # font size
     annotator = Annotator(mosaic, line_width=round(fs / 10), font_size=fs, pil=True, example=names)
-    for i in range(bs):
+    for i in range(i + 1):
         x, y = int(w * (i // ns)), int(h * (i % ns))  # block origin
         annotator.rectangle([x, y, x + w, y + h], None, (255, 255, 255), width=2)  # borders
         if paths:
             annotator.text((x + 5, y + 5), text=Path(paths[i]).name[:40], txt_color=(220, 220, 220))  # filenames
         if len(cls) > 0:
             idx = batch_idx == i
-            classes = cls[idx].astype("int")
-            labels = confs is None
+            classes = cls[idx].astype('int')
 
             if len(bboxes):
-                boxes = bboxes[idx]
-                conf = confs[idx] if confs is not None else None  # check for confidence presence (label vs pred)
-                is_obb = boxes.shape[-1] == 5  # xywhr
-                boxes = ops.xywhr2xyxyxyxy(boxes) if is_obb else ops.xywh2xyxy(boxes)
-                if len(boxes):
-                    if boxes[:, :4].max() <= 1.1:  # if normalized with tolerance 0.1
-                        boxes[..., 0::2] *= w  # scale to pixels
-                        boxes[..., 1::2] *= h
+                boxes = ops.xywh2xyxy(bboxes[idx, :4]).T
+                labels = bboxes.shape[1] == 4  # labels if no conf column
+                conf = None if labels else bboxes[idx, 4]  # check for confidence presence (label vs pred)
+
+                if boxes.shape[1]:
+                    if boxes.max() <= 1.01:  # if normalized with tolerance 0.01
+                        boxes[[0, 2]] *= w  # scale to pixels
+                        boxes[[1, 3]] *= h
                     elif scale < 1:  # absolute coords need scale if image scales
-                        boxes[..., :4] *= scale
-                boxes[..., 0::2] += x
-                boxes[..., 1::2] += y
-                for j, box in enumerate(boxes.astype(np.int64).tolist()):
+                        boxes *= scale
+                boxes[[0, 2]] += x
+                boxes[[1, 3]] += y
+                for j, box in enumerate(boxes.T.tolist()):
                     c = classes[j]
                     color = colors(c)
                     c = names.get(c, c) if names else c
-                    if labels or conf[j] > conf_thres:
-                        label = f"{c}" if labels else f"{c} {conf[j]:.1f}"
-                        annotator.box_label(box, label, color=color, rotated=is_obb)
-
+                    if labels or conf[j] > 0.25:  # 0.25 conf thresh
+                        label = f'{c}' if labels else f'{c} {conf[j]:.1f}'
+                        annotator.box_label(box, label, color=color)
             elif len(classes):
                 for c in classes:
                     color = colors(c)
                     c = names.get(c, c) if names else c
-                    annotator.text((x, y), f"{c}", txt_color=color, box_style=True)
+                    annotator.text((x, y), f'{c}', txt_color=color, box_style=True)
 
             # Plot keypoints
             if len(kpts):
@@ -801,7 +799,7 @@ def plot_images(
                 kpts_[..., 0] += x
                 kpts_[..., 1] += y
                 for j in range(len(kpts_)):
-                    if labels or conf[j] > conf_thres:
+                    if labels or conf[j] > 0.25:  # 0.25 conf thresh
                         annotator.kpts(kpts_[j])
 
             # Plot masks
@@ -816,8 +814,8 @@ def plot_images(
                     image_masks = np.where(image_masks == index, 1.0, 0.0)
 
                 im = np.asarray(annotator.im).copy()
-                for j in range(len(image_masks)):
-                    if labels or conf[j] > conf_thres:
+                for j, box in enumerate(boxes.T.tolist()):
+                    if labels or conf[j] > 0.25:  # 0.25 conf thresh
                         color = colors(classes[j])
                         mh, mw = image_masks[j].shape
                         if mh != h or mw != w:
@@ -827,12 +825,8 @@ def plot_images(
                         else:
                             mask = image_masks[j].astype(bool)
                         with contextlib.suppress(Exception):
-                            im[y : y + h, x : x + w, :][mask] = (
-                                im[y : y + h, x : x + w, :][mask] * 0.4 + np.array(color) * 0.6
-                            )
+                            im[y:y + h, x:x + w, :][mask] = im[y:y + h, x:x + w, :][mask] * 0.4 + np.array(color) * 0.6
                 annotator.fromarray(im)
-    if not save:
-        return np.asarray(annotator.im)
     annotator.im.save(fname)  # save
     if on_plot:
         on_plot(fname)
@@ -1028,13 +1022,13 @@ def feature_visualization(x, module_type, stage, n=32, save_dir=Path("runs/detec
     for m in ["Detect", "Pose", "Segment"]:
         if m in module_type:
             return
-    _, channels, height, width = x.shape  # batch, channels, height, width
+    batch, channels, height, width = x.shape  # batch, channels, height, width
     if height > 1 and width > 1:
         f = save_dir / f"stage{stage}_{module_type.split('.')[-1]}_features.png"  # filename
 
         blocks = torch.chunk(x[0].cpu(), channels, dim=0)  # select batch index 0, block by channels
         n = min(n, channels)  # number of plots
-        _, ax = plt.subplots(math.ceil(n / 8), 8, tight_layout=True)  # 8 rows x n/8 cols
+        fig, ax = plt.subplots(math.ceil(n / 8), 8, tight_layout=True)  # 8 rows x n/8 cols
         ax = ax.ravel()
         plt.subplots_adjust(wspace=0.05, hspace=0.05)
         for i in range(n):
