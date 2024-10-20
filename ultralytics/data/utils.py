@@ -79,7 +79,7 @@ def verify_image(args):
         shape = np_data.shape  # Get the shape of the numpy array
         assert len(shape) == 3, f"invalid shape {shape}: expected a 3D array (H, W, C)"
         assert shape[0] > 9 and shape[1] > 9, f"array size {shape[:2]} <10 pixels"
-        assert shape[2] == num_bands, f"expected 7 channels, but got {shape[2]}"
+        assert shape[2] == num_bands, f"expected {num_bands} channels, but got {shape[2]}"
 
         # Optionally check for NaN or infinite values
         if not np.isfinite(np_data).all():
@@ -102,7 +102,7 @@ def verify_image_label(args):
         shape = np_data.shape  # Get the shape of the numpy array
         assert len(shape) == 3, f"invalid shape {shape}: expected a 3D array (H, W, C)"
         assert shape[0] > 9 and shape[1] > 9, f"array size {shape[:2]} <10 pixels"
-        assert shape[2] == num_bands, f"expected 7 channels, but got {shape[2]}"
+        assert shape[2] == num_bands, f"expected {num_bands} channels, but got {shape[2]}"
 
         # Verify labels
         if os.path.isfile(lb_file):
