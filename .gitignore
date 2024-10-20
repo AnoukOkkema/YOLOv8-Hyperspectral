@@ -142,6 +142,7 @@ runs/
 wandb/
 tests/
 .DS_Store
+dataset/
 
 # Neural Network weights -----------------------------------------------------------------------------------------------
 weights/

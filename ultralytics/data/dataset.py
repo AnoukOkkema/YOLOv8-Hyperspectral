@@ -41,7 +41,7 @@ class YOLODataset(BaseDataset):
         assert not (self.use_segments and self.use_keypoints), "Can not use both segments and keypoints."
         super().__init__(*args, **kwargs)
 
-    def cache_labels(self, path=Path("./labels.cache")):
+    def cache_labels(self, path=Path("./labels.cache"), num_bands=7):
         """
         Cache dataset labels, check images and read shapes.
 
@@ -72,6 +72,7 @@ class YOLODataset(BaseDataset):
                     repeat(len(self.data["names"])),
                     repeat(nkpt),
                     repeat(ndim),
+                    repeat(num_bands)  # Hier voegen we num_bands toe aan de iterable
                 ),
             )
             pbar = TQDM(results, desc=desc, total=total)
@@ -108,7 +109,7 @@ class YOLODataset(BaseDataset):
         save_dataset_cache_file(self.prefix, path, x)
         return x
 
-    def get_labels(self):
+    def get_labels(self, num_bands):
         """Returns dictionary of labels for YOLO training."""
         self.label_files = img2label_paths(self.im_files)
         cache_path = Path(self.label_files[0]).parent.with_suffix(".cache")
@@ -117,7 +118,7 @@ class YOLODataset(BaseDataset):
             assert cache["version"] == DATASET_CACHE_VERSION  # matches current version
             assert cache["hash"] == get_hash(self.label_files + self.im_files)  # identical hash
         except (FileNotFoundError, AssertionError, AttributeError):
-            cache, exists = self.cache_labels(cache_path), False  # run cache ops
+            cache, exists = self.cache_labels(cache_path, num_bands), False  # run cache ops
 
         # Display cache
         nf, nm, ne, nc, n = cache.pop("results")  # found, missing, empty, corrupt, total
@@ -242,7 +243,7 @@ class ClassificationDataset(torchvision.datasets.ImageFolder):
         torch_transforms (callable): PyTorch transforms to be applied to the images.
     """
 
-    def __init__(self, root, args, augment=False, prefix=""):
+    def __init__(self, root, args, augment=False, num_bands=7, prefix=""):
         """
         Initialize YOLO object with root, image size, augmentations, and cache settings.
 
@@ -262,7 +263,7 @@ class ClassificationDataset(torchvision.datasets.ImageFolder):
         self.prefix = colorstr(f"{prefix}: ") if prefix else ""
         self.cache_ram = args.cache is True or args.cache == "ram"  # cache images into RAM
         self.cache_disk = args.cache == "disk"  # cache images on hard drive as uncompressed *.npy files
-        self.samples = self.verify_images()  # filter out bad images
+        self.samples = self.verify_images(num_bands)  # filter out bad images
         self.samples = [list(x) + [Path(x[0]).with_suffix(".npy"), None] for x in self.samples]  # file, index, npy, im
         scale = (1.0 - args.scale, 1.0)  # (0.08, 1.0)
         self.torch_transforms = (
@@ -271,37 +272,41 @@ class ClassificationDataset(torchvision.datasets.ImageFolder):
                 scale=scale,
                 hflip=args.fliplr,
                 vflip=args.flipud,
-                erasing=args.erasing,
-                auto_augment=args.auto_augment,
-                hsv_h=args.hsv_h,
-                hsv_s=args.hsv_s,
-                hsv_v=args.hsv_v,
+                num_bands=num_bands
             )
             if augment
-            else classify_transforms(size=args.imgsz, crop_fraction=args.crop_fraction)
+            else classify_transforms(size=args.imgsz, crop_fraction=args.crop_fraction, num_bands=num_bands)
         )
 
     def __getitem__(self, i):
         """Returns subset of data and targets corresponding to given indices."""
         f, j, fn, im = self.samples[i]  # filename, index, filename.with_suffix('.npy'), image
+
         if self.cache_ram and im is None:
-            im = self.samples[i][3] = cv2.imread(f)
+            # Load the image into RAM as a NumPy array
+            im = self.samples[i][3] = np.load(f)
         elif self.cache_disk:
-            if not fn.exists():  # load npy
-                np.save(fn.as_posix(), cv2.imread(f), allow_pickle=False)
+            if not fn.exists():  # if the .npy file does not exist yet, save it
+                np.save(fn.as_posix(), np.load(f), allow_pickle=False)
+            # Load image from npy file
             im = np.load(fn)
-        else:  # read image
-            im = cv2.imread(f)  # BGR
-        # Convert NumPy array to PIL image
-        im = Image.fromarray(cv2.cvtColor(im, cv2.COLOR_BGR2RGB))
-        sample = self.torch_transforms(im)
+        else:  # read the image directly from file
+            im = np.load(f)  # Directly loading the .npy file which contains the 7 channels
+        
+        # Convert the NumPy array (7 channels) to a PyTorch tensor
+        im_tensor = torch.from_numpy(im).float()  # Convert to float32 tensor
+        im_tensor = im_tensor.permute(2, 0, 1)  # Van [hoogte, breedte, aantal_kanalen] naar [aantal_kanalen, hoogte, breedte]
+
+        # Apply any necessary transformations directly on the NumPy array
+        sample = self.torch_transforms(im_tensor)  # Assuming your transforms can handle NumPy arrays
+
         return {"img": sample, "cls": j}
 
     def __len__(self) -> int:
         """Return the total number of samples in the dataset."""
         return len(self.samples)
 
-    def verify_images(self):
+    def verify_images(self, num_bands):
         """Verify all images in dataset."""
         desc = f"{self.prefix}Scanning {self.root}..."
         path = Path(self.root).with_suffix(".cache")  # *.cache file path
@@ -321,7 +326,7 @@ class ClassificationDataset(torchvision.datasets.ImageFolder):
         # Run scan if *.cache retrieval failed
         nf, nc, msgs, samples, x = 0, 0, [], [], {}
         with ThreadPool(NUM_THREADS) as pool:
-            results = pool.imap(func=verify_image, iterable=zip(self.samples, repeat(self.prefix)))
+            results = pool.imap(func=verify_image, iterable=zip(self.samples, repeat(self.prefix), repeat(num_bands)))
             pbar = TQDM(results, desc=desc, total=len(self.samples))
             for sample, nf_f, nc_f, msg in pbar:
                 if nf_f:
@@ -337,7 +342,7 @@ class ClassificationDataset(torchvision.datasets.ImageFolder):
         x["hash"] = get_hash([x[0] for x in self.samples])
         x["results"] = nf, nc, len(samples), samples
         x["msgs"] = msgs  # warnings
-        save_dataset_cache_file(self.prefix, path, x)
+        save_dataset_cache_file(self.prefix, path, x)        
         return samples
 
 

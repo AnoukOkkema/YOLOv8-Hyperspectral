@@ -78,14 +78,14 @@ class ClassificationTrainer(BaseTrainer):
 
         return ckpt
 
-    def build_dataset(self, img_path, mode="train", batch=None):
+    def build_dataset(self, img_path, mode="train", batch=None, num_bands=7):
         """Creates a ClassificationDataset instance given an image path, and mode (train/test etc.)."""
-        return ClassificationDataset(root=img_path, args=self.args, augment=mode == "train", prefix=mode)
+        return ClassificationDataset(root=img_path, args=self.args, augment=mode == "train", num_bands=num_bands, prefix=mode)
 
-    def get_dataloader(self, dataset_path, batch_size=16, rank=0, mode="train"):
+    def get_dataloader(self, dataset_path, batch_size=16, rank=0, mode="train", num_bands=7):
         """Returns PyTorch DataLoader with transforms to preprocess images for inference."""
         with torch_distributed_zero_first(rank):  # init dataset *.cache only once if DDP
-            dataset = self.build_dataset(dataset_path, mode)
+            dataset = self.build_dataset(dataset_path, mode, num_bands=num_bands)
 
         loader = build_dataloader(dataset, batch_size, self.args.workers, rank=rank)
         # Attach inference transforms

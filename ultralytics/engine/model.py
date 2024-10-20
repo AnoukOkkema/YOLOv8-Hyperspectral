@@ -480,6 +480,7 @@ class Model(nn.Module):
     def val(
         self,
         validator=None,
+        num_bands=7,
         **kwargs,
     ):
         """
@@ -509,7 +510,7 @@ class Model(nn.Module):
         custom = {"rect": True}  # method defaults
         args = {**self.overrides, **custom, **kwargs, "mode": "val"}  # highest priority args on the right
 
-        validator = (validator or self._smart_load("validator"))(args=args, _callbacks=self.callbacks)
+        validator = (validator or self._smart_load("validator"))(args=args, _callbacks=self.callbacks, num_bands=num_bands)
         validator(model=self.model)
         self.metrics = validator.metrics
         return validator.metrics
@@ -589,6 +590,7 @@ class Model(nn.Module):
     def train(
         self,
         trainer=None,
+        num_bands=7,
         **kwargs,
     ):
         """
@@ -618,6 +620,7 @@ class Model(nn.Module):
             PermissionError: If there is a permission issue with the HUB session.
             ModuleNotFoundError: If the HUB SDK is not installed.
         """
+
         self._check_is_pytorch_model()
         if hasattr(self.session, "model") and self.session.model.id:  # Ultralytics HUB session with loaded model
             if any(kwargs):
@@ -651,7 +654,7 @@ class Model(nn.Module):
                     pass
 
         self.trainer.hub_session = self.session  # attach optional HUB session
-        self.trainer.train()
+        self.trainer.train(num_bands)
         # Update model and cfg after training
         if RANK in (-1, 0):
             ckpt = self.trainer.best if self.trainer.best.exists() else self.trainer.last

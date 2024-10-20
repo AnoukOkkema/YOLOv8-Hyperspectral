@@ -7,7 +7,7 @@ from PIL import Image
 from ultralytics.engine.predictor import BasePredictor
 from ultralytics.engine.results import Results
 from ultralytics.utils import DEFAULT_CFG, ops
-
+import numpy as np
 
 class ClassificationPredictor(BasePredictor):
     """
@@ -32,6 +32,33 @@ class ClassificationPredictor(BasePredictor):
         super().__init__(cfg, overrides, _callbacks)
         self.args.task = "classify"
         self._legacy_transform_name = "ultralytics.yolo.data.augment.ToTensor"
+
+    # def preprocess(self, img):
+    #     """Converts input image to model-compatible data type."""
+
+    #     # Controleer of de input een lijst is
+    #     if isinstance(img, list):
+    #         # Verwerk elke afbeelding in de lijst
+    #         processed_images = []
+    #         for image in img:
+    #             if isinstance(image, torch.Tensor):
+    #                 if image.ndim != 3 or image.shape[0] != 7:
+    #                     raise ValueError("Each input tensor must be a 3D tensor with 7 bands.")
+    #             elif isinstance(image, np.ndarray):
+    #                 if image.ndim != 3 or image.shape[0] != 7:
+    #                     raise ValueError("Each input image must be a 3D numpy array with 7 bands.")
+    #                 image = torch.from_numpy(image).float()  # Zorg ervoor dat we met float werken
+    #             else:
+    #                 raise TypeError("Input images must be numpy arrays or PyTorch tensors.")
+                
+    #             # Stuur de tensor naar het juiste apparaat
+    #             image = image.to(self.model.device)
+    #             processed_images.append(image.half() if self.model.fp16 else image.float())
+            
+    #         # Retourneer een tensor van verwerkte afbeeldingen
+    #         return torch.stack(processed_images)  # Stapel de afbeeldingen in een batch
+    #     else:
+    #         raise TypeError("Input image must be a list of numpy arrays or PyTorch tensors.")
 
     def preprocess(self, img):
         """Converts input image to model-compatible data type."""

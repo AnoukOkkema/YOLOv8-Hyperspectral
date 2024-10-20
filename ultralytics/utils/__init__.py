@@ -314,6 +314,19 @@ class ThreadingLocked:
 
         return decorated
 
+def update_yaml_config(yaml_path, bands):
+    # Load the YAML configuration
+    with open(yaml_path, 'r') as file:
+        config = yaml.safe_load(file)
+    
+    # Update the 'bands' or 'channels' field
+    config['model']['channels'] = bands  # Ensure the YAML has a 'channels' field under 'model'
+    
+    # Write the updated config back to the YAML file
+    with open(yaml_path, 'w') as file:
+        yaml.dump(config, file)
+    
+    return config
 
 def yaml_save(file="data.yaml", data=None, header=""):
     """

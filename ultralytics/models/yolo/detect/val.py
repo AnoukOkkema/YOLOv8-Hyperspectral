@@ -224,7 +224,7 @@ class DetectionValidator(BaseValidator):
         return build_dataloader(dataset, batch_size, self.args.workers, shuffle=False, rank=-1)  # return dataloader
 
     def plot_val_samples(self, batch, ni):
-        """Plot validation image samples."""
+        """Plot validation image samples."""        
         plot_images(
             batch["img"],
             batch["batch_idx"],

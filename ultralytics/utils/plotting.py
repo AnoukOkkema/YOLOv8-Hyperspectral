@@ -16,7 +16,6 @@ from ultralytics.utils import LOGGER, TryExcept, ops, plt_settings, threaded
 from .checks import check_font, check_version, is_ascii
 from .files import increment_path
 
-
 class Colors:
     """
     Ultralytics default color palette https://ultralytics.com/.
@@ -113,18 +112,21 @@ class Annotator:
     def __init__(self, im, line_width=None, font_size=None, font="Arial.ttf", pil=False, example="abc"):
         """Initialize the Annotator class with image and line width along with color palette for keypoints and limbs."""
         non_ascii = not is_ascii(example)  # non-latin labels, i.e. asian, arabic, cyrillic
+
         input_is_pil = isinstance(im, Image.Image)
+
         self.pil = pil or non_ascii or input_is_pil
+
         self.lw = line_width or max(round(sum(im.size if input_is_pil else im.shape) / 2 * 0.003), 2)
+
         if self.pil:  # use PIL
             self.im = im if input_is_pil else Image.fromarray(im)
             self.draw = ImageDraw.Draw(self.im)
-            try:
-                font = check_font("Arial.Unicode.ttf" if non_ascii else font)
-                size = font_size or max(round(sum(self.im.size) / 2 * 0.035), 12)
-                self.font = ImageFont.truetype(str(font), size)
-            except Exception:
-                self.font = ImageFont.load_default()
+            
+            font = check_font("Arial.Unicode.ttf" if non_ascii else font)
+            size = font_size or max(round(sum(self.im.size) / 2 * 0.035), 12)
+            self.font = ImageFont.truetype(str(font), size)
+
             # Deprecation fix for w, h = getsize(string) -> _, _, w, h = getbox(string)
             if check_version(pil_version, "9.2.0"):
                 self.font.getsize = lambda x: self.font.getbbox(x)[2:4]  # text width, height
@@ -133,6 +135,7 @@ class Annotator:
             self.im = im if im.flags.writeable else im.copy()
             self.tf = max(self.lw - 1, 1)  # font thickness
             self.sf = self.lw / 3  # font scale
+
         # Pose
         self.skeleton = [
             [16, 14],
@@ -699,16 +702,22 @@ def save_one_box(xyxy, im, file=Path("im.jpg"), gain=1.02, pad=10, square=False,
 
 
 @threaded
-def plot_images(images,
-                batch_idx,
-                cls,
-                bboxes=np.zeros(0, dtype=np.float32),
-                masks=np.zeros(0, dtype=np.uint8),
-                kpts=np.zeros((0, 51), dtype=np.float32),
-                paths=None,
-                fname='images.jpg',
-                names=None,
-                on_plot=None):
+def plot_images(
+    images,
+    batch_idx,
+    cls,
+    bboxes=np.zeros(0, dtype=np.float32),
+    confs=None,
+    masks=np.zeros(0, dtype=np.uint8),
+    kpts=np.zeros((0, 51), dtype=np.float32),
+    paths=None,
+    fname="images.jpg",
+    names=None,
+    on_plot=None,
+    max_subplots=16,
+    save=True,
+    conf_thres=0.25,
+):
     """Plot image grid with labels."""
     if isinstance(images, torch.Tensor):
         images = images.cpu().float().numpy()
@@ -724,22 +733,31 @@ def plot_images(images,
         batch_idx = batch_idx.cpu().numpy()
 
     max_size = 1920  # max image size
-    max_subplots = 16  # max image subplots, i.e. 4x4
     bs, _, h, w = images.shape  # batch size, _, height, width
     bs = min(bs, max_subplots)  # limit plot images
-    ns = np.ceil(bs ** 0.5)  # number of subplots (square)
-    if np.max(images[0]) <= 1:
-        images *= 255  # de-normalise (optional)
+    ns = np.ceil(bs**0.5)  # number of subplots (square)
+
+    images = (images - np.min(images)) / (np.max(images) - np.min(images)) * 255
 
     # Build Image
+    # print('BATCH SIZE IS: ', bs)
     mosaic = np.full((int(ns * h), int(ns * w), 3), 255, dtype=np.uint8)  # init
-    for i, im in enumerate(images):
-        if i == max_subplots:  # if last batch has fewer images than we expect
-            break
+    #mosaic = np.full((int(ns * h), int(ns * w), 4), 255, dtype=np.uint8)  # init
+    for i in range(bs):
+        images[i] = images[i].astype(np.uint8)
+
+        transposed_image = images[i].transpose(1, 2, 0)  # van (7, 224, 224) naar (224, 224, 7)
+
+        # print('shape of image: ', transposed_image.shape)
+        # print('type of image: ', transposed_image.dtype)
         x, y = int(w * (i // ns)), int(h * (i % ns))  # block origin
-        im = im.transpose(1, 2, 0)
-        (R, D, G, B, X, Y, Z) = cv2.split(im)
-        merged = cv2.merge([B, G, R])
+        #mosaic[y : y + h, x : x + w, :] = images[i].transpose(1, 2, 0)
+        #(G, B, D, R) = cv2.split(images[i].astype(np.uint8))
+        #print('shape of channels: ', G.shape, ', ', B.shape, ', ', D.shape, ', ', R.shape)
+        channels = cv2.split(transposed_image.astype(np.uint8))
+        # print("channels: ", channels)
+        R, G, B = channels[0], channels[1], channels[2]  # Of welke banden je ook nodig hebt
+        merged = cv2.merge([R, G, B])
         mosaic[y:y + h, x:x + w, :] = merged
 
     # Resize (optional)
@@ -751,41 +769,45 @@ def plot_images(images,
 
     # Annotate
     fs = int((h + w) * ns * 0.01)  # font size
+
     annotator = Annotator(mosaic, line_width=round(fs / 10), font_size=fs, pil=True, example=names)
-    for i in range(i + 1):
+
+    for i in range(bs):
         x, y = int(w * (i // ns)), int(h * (i % ns))  # block origin
         annotator.rectangle([x, y, x + w, y + h], None, (255, 255, 255), width=2)  # borders
         if paths:
             annotator.text((x + 5, y + 5), text=Path(paths[i]).name[:40], txt_color=(220, 220, 220))  # filenames
         if len(cls) > 0:
             idx = batch_idx == i
-            classes = cls[idx].astype('int')
+            classes = cls[idx].astype("int")
+            labels = confs is None
 
             if len(bboxes):
-                boxes = ops.xywh2xyxy(bboxes[idx, :4]).T
-                labels = bboxes.shape[1] == 4  # labels if no conf column
-                conf = None if labels else bboxes[idx, 4]  # check for confidence presence (label vs pred)
-
-                if boxes.shape[1]:
-                    if boxes.max() <= 1.01:  # if normalized with tolerance 0.01
-                        boxes[[0, 2]] *= w  # scale to pixels
-                        boxes[[1, 3]] *= h
+                boxes = bboxes[idx]
+                conf = confs[idx] if confs is not None else None  # check for confidence presence (label vs pred)
+                if len(boxes):
+                    if boxes[:, :4].max() <= 1.1:  # if normalized with tolerance 0.1
+                        boxes[..., [0, 2]] *= w  # scale to pixels
+                        boxes[..., [1, 3]] *= h
                     elif scale < 1:  # absolute coords need scale if image scales
-                        boxes *= scale
-                boxes[[0, 2]] += x
-                boxes[[1, 3]] += y
-                for j, box in enumerate(boxes.T.tolist()):
+                        boxes[..., :4] *= scale
+                boxes[..., 0] += x
+                boxes[..., 1] += y
+                is_obb = boxes.shape[-1] == 5  # xywhr
+                boxes = ops.xywhr2xyxyxyxy(boxes) if is_obb else ops.xywh2xyxy(boxes)
+                for j, box in enumerate(boxes.astype(np.int64).tolist()):
                     c = classes[j]
                     color = colors(c)
                     c = names.get(c, c) if names else c
-                    if labels or conf[j] > 0.25:  # 0.25 conf thresh
-                        label = f'{c}' if labels else f'{c} {conf[j]:.1f}'
-                        annotator.box_label(box, label, color=color)
+                    if labels or conf[j] > conf_thres:
+                        label = f"{c}" if labels else f"{c} {conf[j]:.1f}"
+                        annotator.box_label(box, label, color=color, rotated=is_obb)
+
             elif len(classes):
                 for c in classes:
                     color = colors(c)
                     c = names.get(c, c) if names else c
-                    annotator.text((x, y), f'{c}', txt_color=color, box_style=True)
+                    annotator.text((x, y), f"{c}", txt_color=color, box_style=True)
 
             # Plot keypoints
             if len(kpts):
@@ -799,8 +821,8 @@ def plot_images(images,
                 kpts_[..., 0] += x
                 kpts_[..., 1] += y
                 for j in range(len(kpts_)):
-                    if labels or conf[j] > 0.25:  # 0.25 conf thresh
-                        annotator.kpts(kpts_[j])
+                    if labels or conf[j] > conf_thres:
+                        annotator.kpts(kpts_[j], conf_thres=conf_thres)
 
             # Plot masks
             if len(masks):
@@ -814,8 +836,8 @@ def plot_images(images,
                     image_masks = np.where(image_masks == index, 1.0, 0.0)
 
                 im = np.asarray(annotator.im).copy()
-                for j, box in enumerate(boxes.T.tolist()):
-                    if labels or conf[j] > 0.25:  # 0.25 conf thresh
+                for j in range(len(image_masks)):
+                    if labels or conf[j] > conf_thres:
                         color = colors(classes[j])
                         mh, mw = image_masks[j].shape
                         if mh != h or mw != w:
@@ -825,8 +847,13 @@ def plot_images(images,
                         else:
                             mask = image_masks[j].astype(bool)
                         with contextlib.suppress(Exception):
-                            im[y:y + h, x:x + w, :][mask] = im[y:y + h, x:x + w, :][mask] * 0.4 + np.array(color) * 0.6
+                            im[y : y + h, x : x + w, :][mask] = (
+                                im[y : y + h, x : x + w, :][mask] * 0.4 + np.array(color) * 0.6
+                            )
                 annotator.fromarray(im)
+    
+    if not save:
+        return np.asarray(annotator.im)
     annotator.im.save(fname)  # save
     if on_plot:
         on_plot(fname)

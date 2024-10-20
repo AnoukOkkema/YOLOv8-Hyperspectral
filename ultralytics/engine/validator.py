@@ -65,7 +65,7 @@ class BaseValidator:
         callbacks (dict): Dictionary to store various callback functions.
     """
 
-    def __init__(self, dataloader=None, save_dir=None, pbar=None, args=None, _callbacks=None):
+    def __init__(self, dataloader=None, save_dir=None, pbar=None, args=None, _callbacks=None, num_bands=7):
         """
         Initializes a BaseValidator instance.
 
@@ -92,6 +92,7 @@ class BaseValidator:
         self.iouv = None
         self.jdict = None
         self.speed = {"preprocess": 0.0, "inference": 0.0, "loss": 0.0, "postprocess": 0.0}
+        self.num_bands = num_bands
 
         self.save_dir = save_dir or get_save_dir(self.args)
         (self.save_dir / "labels" if self.args.save_txt else self.save_dir).mkdir(parents=True, exist_ok=True)
@@ -154,7 +155,7 @@ class BaseValidator:
             self.dataloader = self.dataloader or self.get_dataloader(self.data.get(self.args.split), self.args.batch)
 
             model.eval()
-            model.warmup(imgsz=(1 if pt else self.args.batch, 7, imgsz, imgsz))  # warmup
+            model.warmup(imgsz=(1 if pt else self.args.batch, self.num_bands, imgsz, imgsz))  # warmup
 
         self.run_callbacks("on_val_start")
         dt = (

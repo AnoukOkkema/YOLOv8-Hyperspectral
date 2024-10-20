@@ -26,13 +26,14 @@ class ClassificationValidator(BaseValidator):
         ```
     """
 
-    def __init__(self, dataloader=None, save_dir=None, pbar=None, args=None, _callbacks=None):
+    def __init__(self, dataloader=None, save_dir=None, pbar=None, args=None, _callbacks=None, num_bands=7):
         """Initializes ClassificationValidator instance with args, dataloader, save_dir, and progress bar."""
         super().__init__(dataloader, save_dir, pbar, args, _callbacks)
         self.targets = None
         self.pred = None
         self.args.task = "classify"
         self.metrics = ClassifyMetrics()
+        self.num_bands = num_bands
 
     def get_desc(self):
         """Returns a formatted string summarizing classification metrics."""
@@ -78,7 +79,7 @@ class ClassificationValidator(BaseValidator):
 
     def build_dataset(self, img_path):
         """Creates and returns a ClassificationDataset instance using given image path and preprocessing parameters."""
-        return ClassificationDataset(root=img_path, args=self.args, augment=False, prefix=self.args.split)
+        return ClassificationDataset(root=img_path, args=self.args, augment=False, num_bands=self.num_bands, prefix=self.args.split)
 
     def get_dataloader(self, dataset_path, batch_size):
         """Builds and returns a data loader for classification tasks with given parameters."""
@@ -92,6 +93,7 @@ class ClassificationValidator(BaseValidator):
 
     def plot_val_samples(self, batch, ni):
         """Plot validation image samples."""
+        
         plot_images(
             images=batch["img"],
             batch_idx=torch.arange(len(batch["img"])),

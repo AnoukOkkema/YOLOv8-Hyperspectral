@@ -1003,26 +1003,27 @@ def v8_transforms(dataset, imgsz, hyp, stretch=False):
     )  # transforms
 
 
-# Classification augmentations -----------------------------------------------------------------------------------------
 def classify_transforms(
     size=224,
-    mean=DEFAULT_MEAN,
-    std=DEFAULT_STD,
+    mean=None,  # Geen standaard mean/std aannemen voor hyperspectrale data
+    std=None,
     interpolation: T.InterpolationMode = T.InterpolationMode.BILINEAR,
-    crop_fraction: float = DEFAULT_CROP_FTACTION,
+    crop_fraction: float = 1.0,  # Crop fraction staat op 1 voor geen cropping
+    num_bands=7  # Aantal kanalen aanpassen naar je dataset
 ):
     """
-    Classification transforms for evaluation/inference. Inspired by timm/data/transforms_factory.py.
+    Classification transforms for evaluation/inference on hyperspectral images with multiple channels.
 
     Args:
-        size (int): image size
-        mean (tuple): mean values of RGB channels
-        std (tuple): std values of RGB channels
-        interpolation (T.InterpolationMode): interpolation mode. default is T.InterpolationMode.BILINEAR.
-        crop_fraction (float): fraction of image to crop. default is 1.0.
+        size (int or tuple): Image size. If tuple, specify (height, width)
+        mean (list or None): Mean values for each channel, should match the number of channels
+        std (list or None): Std values for each channel, should match the number of channels
+        interpolation (T.InterpolationMode): Interpolation mode, default is bilinear.
+        crop_fraction (float): Fraction of the image to crop (1.0 means no crop).
+        num_channels (int): Number of channels in the hyperspectral data.
 
     Returns:
-        (T.Compose): torchvision transforms
+        T.Compose: Composed torchvision transforms.
     """
 
     if isinstance(size, (tuple, list)):
@@ -1032,22 +1033,20 @@ def classify_transforms(
         scale_size = math.floor(size / crop_fraction)
         scale_size = (scale_size, scale_size)
 
-    # aspect ratio is preserved, crops center within image, no borders are added, image is lost
-    if scale_size[0] == scale_size[1]:
-        # simple case, use torchvision built-in Resize w/ shortest edge mode (scalar size arg)
-        tfl = [T.Resize(scale_size[0], interpolation=interpolation)]
-    else:
-        # resize shortest edge to matching target dim for non-square target
-        tfl = [T.Resize(scale_size)]
+    # Aspect ratio preserved, crops center of the image
+    tfl = [T.Resize(scale_size[0], interpolation=interpolation)]
     tfl += [T.CenterCrop(size)]
 
-    tfl += [
-        T.ToTensor(),
-        T.Normalize(
-            mean=torch.tensor(mean),
-            std=torch.tensor(std),
-        ),
-    ]
+    # Normalization for multi-channel input
+    if mean is not None and std is not None:
+        assert len(mean) == num_bands and len(std) == num_bands, \
+            "Mean and std lists should have the same length as the number of channels."
+        tfl += [
+            T.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),
+        ]
+    else:
+        # If no mean/std provided, just convert to tensor
+        tfl += []
 
     return T.Compose(tfl)
 
@@ -1055,95 +1054,64 @@ def classify_transforms(
 # Classification augmentations train ---------------------------------------------------------------------------------------
 def classify_augmentations(
     size=224,
-    mean=DEFAULT_MEAN,
-    std=DEFAULT_STD,
+    mean=None,  # Hyperspectrale data vereist aangepaste mean/std
+    std=None,
     scale=None,
     ratio=None,
     hflip=0.5,
     vflip=0.0,
-    auto_augment=None,
-    hsv_h=0.015,  # image HSV-Hue augmentation (fraction)
-    hsv_s=0.4,  # image HSV-Saturation augmentation (fraction)
-    hsv_v=0.4,  # image HSV-Value augmentation (fraction)
-    force_color_jitter=False,
+    auto_augment=None,  # Kan worden verwijderd als het alleen voor kleurkanalen is
     erasing=0.0,
     interpolation: T.InterpolationMode = T.InterpolationMode.BILINEAR,
+    num_bands=7,  # Aantal kanalen in hyperspectrale data
 ):
     """
-    Classification transforms with augmentation for training. Inspired by timm/data/transforms_factory.py.
-
+    Classification transforms with augmentation for hyperspectral data (7 channels).
+    
     Args:
-        size (int): image size
-        scale (tuple): scale range of the image. default is (0.08, 1.0)
-        ratio (tuple): aspect ratio range of the image. default is (3./4., 4./3.)
-        mean (tuple): mean values of RGB channels
-        std (tuple): std values of RGB channels
-        hflip (float): probability of horizontal flip
-        vflip (float): probability of vertical flip
-        auto_augment (str): auto augmentation policy. can be 'randaugment', 'augmix', 'autoaugment' or None.
-        hsv_h (float): image HSV-Hue augmentation (fraction)
-        hsv_s (float): image HSV-Saturation augmentation (fraction)
-        hsv_v (float): image HSV-Value augmentation (fraction)
-        force_color_jitter (bool): force to apply color jitter even if auto augment is enabled
-        erasing (float): probability of random erasing
-        interpolation (T.InterpolationMode): interpolation mode. default is T.InterpolationMode.BILINEAR.
+        size (int): Image size
+        scale (tuple): Scale range of the image
+        ratio (tuple): Aspect ratio range of the image
+        mean (tuple): Mean values for each channel (should match the number of channels)
+        std (tuple): Std values for each channel (should match the number of channels)
+        hflip (float): Probability of horizontal flip
+        vflip (float): Probability of vertical flip
+        erasing (float): Probability of random erasing
+        interpolation (T.InterpolationMode): Interpolation mode
+        num_channels (int): Number of channels in the hyperspectral data
 
     Returns:
-        (T.Compose): torchvision transforms
+        T.Compose: Composed torchvision transforms
     """
-    # Transforms to apply if albumentations not installed
-    if not isinstance(size, int):
-        raise TypeError(f"classify_transforms() size {size} must be integer, not (list, tuple)")
-    scale = tuple(scale or (0.08, 1.0))  # default imagenet scale range
-    ratio = tuple(ratio or (3.0 / 4.0, 4.0 / 3.0))  # default imagenet ratio range
+
+    # Default scale and ratio values
+    scale = tuple(scale or (0.08, 1.0))
+    ratio = tuple(ratio or (3.0 / 4.0, 4.0 / 3.0))
+
+    # Primary transforms (resize, crop, flips)
     primary_tfl = [T.RandomResizedCrop(size, scale=scale, ratio=ratio, interpolation=interpolation)]
     if hflip > 0.0:
         primary_tfl += [T.RandomHorizontalFlip(p=hflip)]
     if vflip > 0.0:
         primary_tfl += [T.RandomVerticalFlip(p=vflip)]
 
-    secondary_tfl = []
-    disable_color_jitter = False
-    if auto_augment:
-        assert isinstance(auto_augment, str)
-        # color jitter is typically disabled if AA/RA on,
-        # this allows override without breaking old hparm cfgs
-        disable_color_jitter = not force_color_jitter
+    # No color jitter or HSV augmentations, since these are RGB-specific
 
-        if auto_augment == "randaugment":
-            if TORCHVISION_0_11:
-                secondary_tfl += [T.RandAugment(interpolation=interpolation)]
-            else:
-                LOGGER.warning('"auto_augment=randaugment" requires torchvision >= 0.11.0. Disabling it.')
+    # Normalization for multi-channel input
+    if mean is not None and std is not None:
+        assert len(mean) == num_bands and len(std) == num_bands, \
+            "Mean and std lists should have the same length as the number of channels."
+        final_tfl = [
+            T.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),  # Normalization for 7 bands
+        ]
+    else:
+        # If no mean/std provided, just convert to tensor
+        final_tfl = []
 
-        elif auto_augment == "augmix":
-            if TORCHVISION_0_13:
-                secondary_tfl += [T.AugMix(interpolation=interpolation)]
-            else:
-                LOGGER.warning('"auto_augment=augmix" requires torchvision >= 0.13.0. Disabling it.')
+    # Random erasing augmentation
+    final_tfl += [T.RandomErasing(p=erasing, inplace=True)]
 
-        elif auto_augment == "autoaugment":
-            if TORCHVISION_0_10:
-                secondary_tfl += [T.AutoAugment(interpolation=interpolation)]
-            else:
-                LOGGER.warning('"auto_augment=autoaugment" requires torchvision >= 0.10.0. Disabling it.')
-
-        else:
-            raise ValueError(
-                f'Invalid auto_augment policy: {auto_augment}. Should be one of "randaugment", '
-                f'"augmix", "autoaugment" or None'
-            )
-
-    if not disable_color_jitter:
-        secondary_tfl += [T.ColorJitter(brightness=hsv_v, contrast=hsv_v, saturation=hsv_s, hue=hsv_h)]
-
-    final_tfl = [
-        T.ToTensor(),
-        T.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),
-        T.RandomErasing(p=erasing, inplace=True),
-    ]
-
-    return T.Compose(primary_tfl + secondary_tfl + final_tfl)
+    return T.Compose(primary_tfl + final_tfl)
 
 
 # NOTE: keep this class for backward compatibility

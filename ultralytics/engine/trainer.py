@@ -170,7 +170,7 @@ class BaseTrainer:
         for callback in self.callbacks.get(event, []):
             callback(self)
 
-    def train(self):
+    def train(self, num_bands):
         """Allow device='', device=None on Multi-GPU systems to default to device=0."""
         if isinstance(self.args.device, str) and len(self.args.device):  # i.e. device='0' or device='0,1,2,3'
             world_size = len(self.args.device.split(","))
@@ -205,7 +205,7 @@ class BaseTrainer:
                 ddp_cleanup(self, str(file))
 
         else:
-            self._do_train(world_size)
+            self._do_train(world_size, num_bands)
 
     def _setup_scheduler(self):
         """Initialize training learning rate scheduler."""
@@ -228,7 +228,7 @@ class BaseTrainer:
             world_size=world_size,
         )
 
-    def _setup_train(self, world_size):
+    def _setup_train(self, world_size, num_bands):
         """Builds dataloaders and optimizer on correct rank process."""
 
         # Model
@@ -283,11 +283,11 @@ class BaseTrainer:
 
         # Dataloaders
         batch_size = self.batch_size // max(world_size, 1)
-        self.train_loader = self.get_dataloader(self.trainset, batch_size=batch_size, rank=RANK, mode="train")
+        self.train_loader = self.get_dataloader(self.trainset, batch_size=batch_size, rank=RANK, mode="train", num_bands = num_bands)
         if RANK in (-1, 0):
             # Note: When training DOTA dataset, double batch size could get OOM on images with >2000 objects.
             self.test_loader = self.get_dataloader(
-                self.testset, batch_size=batch_size if self.args.task == "obb" else batch_size * 2, rank=-1, mode="val"
+                self.testset, batch_size=batch_size if self.args.task == "obb" else batch_size * 2, rank=-1, mode="val", num_bands = num_bands
             )
             self.validator = self.get_validator()
             metric_keys = self.validator.metrics.keys + self.label_loss_items(prefix="val")
@@ -315,11 +315,11 @@ class BaseTrainer:
         self.scheduler.last_epoch = self.start_epoch - 1  # do not move
         self.run_callbacks("on_pretrain_routine_end")
 
-    def _do_train(self, world_size=1):
+    def _do_train(self, world_size=1, num_bands=7):
         """Train completed, evaluate and plot if specified by arguments."""
         if world_size > 1:
             self._setup_ddp(world_size)
-        self._setup_train(world_size)
+        self._setup_train(world_size, num_bands=num_bands)
 
         nb = len(self.train_loader)  # number of batches
         nw = max(round(self.args.warmup_epochs * nb), 100) if self.args.warmup_epochs > 0 else -1  # warmup iterations

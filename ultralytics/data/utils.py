@@ -35,7 +35,7 @@ from ultralytics.utils.downloads import download, safe_download, unzip_file
 from ultralytics.utils.ops import segments2boxes
 
 HELP_URL = "See https://docs.ultralytics.com/datasets/detect for dataset formatting guidance."
-IMG_FORMATS = "bmp", "dng", "jpeg", "jpg", "mpo", "png", "tif", "tiff", "webp", "pfm"  # image suffixes
+IMG_FORMATS = "bmp", "dng", "jpeg", "jpg", "mpo", "png", "tif", "tiff", "webp", "pfm", "npy"  # image suffixes
 VID_FORMATS = "asf", "avi", "gif", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "ts", "wmv", "webm"  # video suffixes
 PIN_MEMORY = str(os.getenv("PIN_MEMORY", True)).lower() == "true"  # global pin_memory for dataloaders
 
@@ -66,51 +66,43 @@ def exif_size(img: Image.Image):
                     s = s[1], s[0]
     return s
 
-
 def verify_image(args):
-    """Verify one image."""
-    (im_file, cls), prefix = args
+    """Verify one NumPy array."""
+    (numpy_file, cls), prefix, num_bands = args
     # Number (found, corrupt), message
     nf, nc, msg = 0, 0, ""
     try:
-        im = Image.open(im_file)
-        im.verify()  # PIL verify
-        shape = exif_size(im)  # image size
-        shape = (shape[1], shape[0])  # hw
-        assert (shape[0] > 9) & (shape[1] > 9), f"image size {shape} <10 pixels"
-        assert im.format.lower() in IMG_FORMATS, f"invalid image format {im.format}"
-        if im.format.lower() in ("jpg", "jpeg"):
-            with open(im_file, "rb") as f:
-                f.seek(-2, 2)
-                if f.read() != b"\xff\xd9":  # corrupt JPEG
-                    ImageOps.exif_transpose(Image.open(im_file)).save(im_file, "JPEG", subsampling=0, quality=100)
-                    msg = f"{prefix}WARNING ⚠️ {im_file}: corrupt JPEG restored and saved"
-        nf = 1
-    except Exception as e:
-        nc = 1
-        msg = f"{prefix}WARNING ⚠️ {im_file}: ignoring corrupt image/label: {e}"
-    return (im_file, cls), nf, nc, msg
+        # Load the NumPy file
+        np_data = np.load(numpy_file)
+        
+        # Check the shape of the array
+        shape = np_data.shape  # Get the shape of the numpy array
+        assert len(shape) == 3, f"invalid shape {shape}: expected a 3D array (H, W, C)"
+        assert shape[0] > 9 and shape[1] > 9, f"array size {shape[:2]} <10 pixels"
+        assert shape[2] == num_bands, f"expected 7 channels, but got {shape[2]}"
 
+        # Optionally check for NaN or infinite values
+        if not np.isfinite(np_data).all():
+            raise ValueError("Numpy array contains NaN or infinite values")
+
+        nf = 1  # Mark file as successfully processed
+    except Exception as e:
+        nc = 1  # Mark file as corrupt or invalid
+        msg = f"{prefix}WARNING ⚠️ {numpy_file}: ignoring corrupt/invalid NumPy file: {e}"
+    return (numpy_file, cls), nf, nc, msg
 
 def verify_image_label(args):
-    """Verify one image-label pair."""
-    im_file, lb_file, prefix, keypoint, num_cls, nkpt, ndim = args
+    """Verify one NumPy array-label pair."""
+    numpy_file, lb_file, prefix, keypoint, num_cls, nkpt, ndim, num_bands = args
     # Number (missing, found, empty, corrupt), message, segments, keypoints
     nm, nf, ne, nc, msg, segments, keypoints = 0, 0, 0, 0, "", [], None
     try:
-        # Verify images
-        im = Image.open(im_file)
-        im.verify()  # PIL verify
-        shape = exif_size(im)  # image size
-        shape = (shape[1], shape[0])  # hw
-        assert (shape[0] > 9) & (shape[1] > 9), f"image size {shape} <10 pixels"
-        assert im.format.lower() in IMG_FORMATS, f"invalid image format {im.format}"
-        if im.format.lower() in ("jpg", "jpeg"):
-            with open(im_file, "rb") as f:
-                f.seek(-2, 2)
-                if f.read() != b"\xff\xd9":  # corrupt JPEG
-                    ImageOps.exif_transpose(Image.open(im_file)).save(im_file, "JPEG", subsampling=0, quality=100)
-                    msg = f"{prefix}WARNING ⚠️ {im_file}: corrupt JPEG restored and saved"
+        # Verify NumPy arrays (similar to image verification)
+        np_data = np.load(numpy_file)
+        shape = np_data.shape  # Get the shape of the numpy array
+        assert len(shape) == 3, f"invalid shape {shape}: expected a 3D array (H, W, C)"
+        assert shape[0] > 9 and shape[1] > 9, f"array size {shape[:2]} <10 pixels"
+        assert shape[2] == num_bands, f"expected 7 channels, but got {shape[2]}"
 
         # Verify labels
         if os.path.isfile(lb_file):
@@ -144,7 +136,7 @@ def verify_image_label(args):
                     lb = lb[i]  # remove duplicates
                     if segments:
                         segments = [segments[x] for x in i]
-                    msg = f"{prefix}WARNING ⚠️ {im_file}: {nl - len(i)} duplicate labels removed"
+                    msg = f"{prefix}WARNING ⚠️ {numpy_file}: {nl - len(i)} duplicate labels removed"
             else:
                 ne = 1  # label empty
                 lb = np.zeros((0, (5 + nkpt * ndim) if keypoint else 5), dtype=np.float32)
@@ -157,10 +149,10 @@ def verify_image_label(args):
                 kpt_mask = np.where((keypoints[..., 0] < 0) | (keypoints[..., 1] < 0), 0.0, 1.0).astype(np.float32)
                 keypoints = np.concatenate([keypoints, kpt_mask[..., None]], axis=-1)  # (nl, nkpt, 3)
         lb = lb[:, :5]
-        return im_file, lb, shape, segments, keypoints, nm, nf, ne, nc, msg
+        return numpy_file, lb, shape, segments, keypoints, nm, nf, ne, nc, msg
     except Exception as e:
         nc = 1
-        msg = f"{prefix}WARNING ⚠️ {im_file}: ignoring corrupt image/label: {e}"
+        msg = f"{prefix}WARNING ⚠️ {numpy_file}: ignoring corrupt/invalid NumPy file/label: {e}"
         return [None, None, None, None, None, nm, nf, ne, nc, msg]
 
 

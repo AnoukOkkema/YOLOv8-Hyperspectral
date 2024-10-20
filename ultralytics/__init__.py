@@ -9,6 +9,7 @@ from ultralytics.models.nas import NAS
 from ultralytics.utils import ASSETS, SETTINGS as settings
 from ultralytics.utils.checks import check_yolo as checks
 from ultralytics.utils.downloads import download
+from ultralytics.utils.yaml_channel_reader import get_channels_from_yaml
 
 __all__ = (
     "__version__",
